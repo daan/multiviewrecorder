@@ -1,0 +1,22 @@
+[project]
+name = "multiviewrecorder"
+version = "0.1.0"
+description = "concurrent recording of multiple webcams on linux using v4l2."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "av>=15.0.0",
+    "opencv-python>=4.12.0.88",
+    "pillow>=11.3.0",
+    "prettytable>=3.16.0",
+    "pyside6>=6.9.1",
+    "pyudev>=0.24.3",
+    "tomli>=2.2.1",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.11,<0.9.0"]
+build-backend = "uv_build"
+
+[project.scripts]
+mvr = "multiviewrecorder:mvr"
