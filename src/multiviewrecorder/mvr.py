@@ -1,6 +1,7 @@
 import sys
 import argparse
 import tomli
+import subprocess
 import av
 from av import FFmpegError
 from PySide6.QtWidgets import (
@@ -299,6 +300,18 @@ def mvr():
         if 'mapped_name' in cam:
             details += f", Mapped Name: {cam['mapped_name']}"
         print(details)
+
+    print(f"Found {len(cameras_to_use)} cameras. Setting focus to manual...")
+    for camera in cameras_to_use:
+        device = camera['path']
+        try:
+            # Disable autofocus
+            subprocess.run(['v4l2-ctl', '-d', device, '--set-ctrl=focus_automatic_continuous=0'], check=False)
+            # Set focus to infinity (0)
+            subprocess.run(['v4l2-ctl', '-d', device, '--set-ctrl=focus_absolute=0'], check=False)
+        except FileNotFoundError:
+            print("Warning: 'v4l2-ctl' command not found. Please install 'v4l-utils'. Autofocus could not be disabled.", file=sys.stderr)
+            break
 
     app = QApplication(sys.argv)
     main_window = MainWindow(cameras_to_use, options)
