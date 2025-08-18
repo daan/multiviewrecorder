@@ -2,8 +2,11 @@ import sys
 import argparse
 import tomli
 import subprocess
+import os
 import av
 from av import FFmpegError
+import cv2
+import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy
 )
@@ -140,13 +143,20 @@ class VideoWorker(QThread):
         self._is_recording = False
 
 class MainWindow(QMainWindow):
-    def __init__(self, cameras, options):
+    def __init__(self, cameras, options, checkerboard_pattern=None):
         super().__init__()
         self.setWindowTitle("Multi-Webcam Recorder")
 
         self.video_labels = {}
         self.workers = {}
         self.cameras = cameras
+        self.checkerboard_pattern = checkerboard_pattern
+        self.latest_frames = {}
+        self.camera_details = {c['path']: c for c in cameras}
+        self.snapshot_counters = {}
+        for cam in self.cameras:
+            filename_base = cam.get('mapped_name', cam['serial'])
+            self.snapshot_counters[filename_base] = 0
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -201,7 +211,29 @@ class MainWindow(QMainWindow):
             self.resize(initial_width, int(initial_height))
 
     def update_frame(self, path, image):
-        self.video_labels[path].setPixmap(QPixmap.fromImage(image))
+        self.latest_frames[path] = image
+
+        display_image = image
+        if self.checkerboard_pattern:
+            qimage = image
+            ptr = qimage.constBits()
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape(qimage.height(), qimage.width(), 3).copy()
+
+            # OpenCV works with BGR
+            bgr_frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
+
+            ret, corners = cv2.findChessboardCorners(gray, self.checkerboard_pattern, None)
+            if ret:
+                cv2.drawChessboardCorners(bgr_frame, self.checkerboard_pattern, corners, ret)
+            
+            # Convert back to RGB for QImage
+            rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+            height, width, _ = rgb_frame.shape
+            bytes_per_line = 3 * width
+            display_image = QImage(rgb_frame.data, width, height, bytes_per_line, QImage.Format_RGB888)
+
+        self.video_labels[path].setPixmap(QPixmap.fromImage(display_image))
 
     def on_error(self, path, error_message):
         print(f"Error on {path}: {error_message}", file=sys.stderr)
@@ -227,9 +259,32 @@ class MainWindow(QMainWindow):
     def capture_finished(self, path):
         self.video_labels[path].setText(f"Camera feed stopped for {path}.")
 
+    def take_snapshots(self):
+        print("Taking snapshots...")
+        for path, qimage in self.latest_frames.items():
+            if qimage is None:
+                continue
+            
+            camera_details = self.camera_details[path]
+            filename_base = camera_details.get('mapped_name', camera_details['serial'])
+            
+            output_dir = os.path.join("images", filename_base)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            count = self.snapshot_counters[filename_base]
+            filepath = os.path.join(output_dir, f"{count:06d}.jpg")
+            
+            if qimage.save(filepath):
+                print(f"Saved snapshot to {filepath}")
+                self.snapshot_counters[filename_base] += 1
+            else:
+                print(f"Error saving snapshot for {path} to {filepath}", file=sys.stderr)
+
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.close()
+        elif event.key() == Qt.Key_Space:
+            self.take_snapshots()
 
     def closeEvent(self, event):
         for worker in self.workers.values():
@@ -245,7 +300,18 @@ def mvr():
     parser.add_argument("--resolution", help="Video resolution (e.g., 1280x720). Overrides config file.")
     parser.add_argument("--framerate", help="Video framerate (e.g., 30). Overrides config file.")
     parser.add_argument("--input_format", help="Input format (e.g., mjpeg). Overrides config file.")
+    parser.add_argument("--checkerboard", help="Find and visualize a checkerboard of the given pattern (e.g., 7x6).")
     args = parser.parse_args()
+
+    checkerboard_pattern = None
+    if args.checkerboard:
+        try:
+            pattern_cols, pattern_rows = map(int, args.checkerboard.split('x'))
+            checkerboard_pattern = (pattern_cols, pattern_rows)
+            print(f"Will search for a {args.checkerboard} checkerboard pattern.")
+        except (ValueError, TypeError):
+            print(f"Warning: Invalid checkerboard pattern '{args.checkerboard}'. Should be 'colsxrows' e.g., '7x6'. Disabling checkerboard detection.")
+            checkerboard_pattern = None
 
     config = {}
     if args.config:
@@ -314,7 +380,7 @@ def mvr():
             break
 
     app = QApplication(sys.argv)
-    main_window = MainWindow(cameras_to_use, options)
+    main_window = MainWindow(cameras_to_use, options, checkerboard_pattern=checkerboard_pattern)
     main_window.show()
     sys.exit(app.exec())
 
