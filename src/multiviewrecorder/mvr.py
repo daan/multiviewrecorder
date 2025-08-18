@@ -46,14 +46,15 @@ class AspectLabel(QLabel):
 
 
 class VideoWorker(QThread):
-    frameReady = Signal(QImage)
+    frameReady = Signal(QImage, object)
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, device, options, parent=None):
+    def __init__(self, device, options, checkerboard_pattern=None, parent=None):
         super().__init__(parent)
         self.device = device
         self.options = options
+        self.checkerboard_pattern = checkerboard_pattern
         self.running = True
         self._is_recording = False
         self._output_file = None
@@ -78,7 +79,7 @@ class VideoWorker(QThread):
                 # Decode for preview
                 try:
                     for frame in packet.decode():
-                        # Convert frame to QImage
+                        # Convert frame to QImage for snapshots and preview base
                         rgb_frame = frame.reformat(format='rgb24')
                         qimage = QImage(
                             bytes(rgb_frame.planes[0]),
@@ -87,7 +88,17 @@ class VideoWorker(QThread):
                             rgb_frame.planes[0].line_size,
                             QImage.Format_RGB888
                         )
-                        self.frameReady.emit(qimage)
+
+                        corners = None
+                        if self.checkerboard_pattern:
+                            # Use a BGR ndarray for OpenCV
+                            bgr_ndarray = frame.to_ndarray(format='bgr24')
+                            gray = cv2.cvtColor(bgr_ndarray, cv2.COLOR_BGR2GRAY)
+                            ret, corners_found = cv2.findChessboardCorners(gray, self.checkerboard_pattern, None)
+                            if ret:
+                                corners = corners_found
+
+                        self.frameReady.emit(qimage, corners)
                 except FFmpegError:
                     # Ignore decode errors, common at stream start
                     pass
@@ -172,10 +183,10 @@ class MainWindow(QMainWindow):
             self.video_labels[path] = label
             video_layout.addWidget(label)
 
-            worker = VideoWorker(path, options)
+            worker = VideoWorker(path, options, checkerboard_pattern=self.checkerboard_pattern)
             self.workers[path] = worker
 
-            worker.frameReady.connect(lambda image, p=path: self.update_frame(p, image))
+            worker.frameReady.connect(lambda image, corners, p=path: self.update_frame(p, image, corners))
             worker.error.connect(lambda msg, p=path: self.on_error(p, msg))
             worker.finished.connect(lambda p=path: self.capture_finished(p))
             worker.start()
@@ -210,22 +221,19 @@ class MainWindow(QMainWindow):
             initial_height = view_width * aspect_ratio + 50
             self.resize(initial_width, int(initial_height))
 
-    def update_frame(self, path, image):
+    def update_frame(self, path, image, corners):
         self.latest_frames[path] = image
 
         display_image = image
-        if self.checkerboard_pattern:
+        if self.checkerboard_pattern and corners is not None:
             qimage = image
             ptr = qimage.constBits()
             arr = np.frombuffer(ptr, dtype=np.uint8).reshape(qimage.height(), qimage.width(), 3).copy()
 
             # OpenCV works with BGR
             bgr_frame = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2GRAY)
-
-            ret, corners = cv2.findChessboardCorners(gray, self.checkerboard_pattern, None)
-            if ret:
-                cv2.drawChessboardCorners(bgr_frame, self.checkerboard_pattern, corners, ret)
+            
+            cv2.drawChessboardCorners(bgr_frame, self.checkerboard_pattern, corners, True)
             
             # Convert back to RGB for QImage
             rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
