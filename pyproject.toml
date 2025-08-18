@@ -20,3 +20,4 @@ build-backend = "uv_build"
 
 [project.scripts]
 mvr = "multiviewrecorder:mvr"
+enumerate_cameras = "multiviewrecorder:enumerate_cameras"
