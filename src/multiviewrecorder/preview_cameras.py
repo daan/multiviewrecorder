@@ -108,7 +108,7 @@ def main(vid_filter=None, pid_filter=None, save_video=False, resolution="1280x72
                 for frame in frames:
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                     # Find the chess board corners
-                    ret, corners = cv2.findChessboardCorners(gray, checkerboard_pattern, None)
+                    ret, corners = cv2.findChessboardCorners(gray, checkerboard_pattern, None, cv2.CALIB_CB_FAST_CHECK)
                     # If found, draw the corners
                     if ret:
                         cv2.drawChessboardCorners(frame, checkerboard_pattern, corners, ret)

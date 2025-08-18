@@ -94,7 +94,7 @@ class VideoWorker(QThread):
                             # Use a BGR ndarray for OpenCV
                             bgr_ndarray = frame.to_ndarray(format='bgr24')
                             gray = cv2.cvtColor(bgr_ndarray, cv2.COLOR_BGR2GRAY)
-                            ret, corners_found = cv2.findChessboardCorners(gray, self.checkerboard_pattern, None)
+                            ret, corners_found = cv2.findChessboardCorners(gray, self.checkerboard_pattern, None, cv2.CALIB_CB_FAST_CHECK)
                             if ret:
                                 corners = corners_found
 
