@@ -64,7 +64,7 @@ def is_video_capture_device(path):
         # that doesn't support the --all query well. We treat this as not a video device.
         return False
 
-if __name__ == "__main__":
+def enumerate_cameras():
     # Ensure you have v4l2-utils installed: sudo apt install v4l2-utils
     parser = argparse.ArgumentParser(description="List available video cameras, with optional filtering.")
     parser.add_argument("--vid", help="Filter by vendor ID (e.g., 046d).")
@@ -81,4 +81,9 @@ if __name__ == "__main__":
         pt.add_row([camera["id"], camera["path"], camera["name"], camera["vid"], camera["pid"], camera["serial"]])
 
     print(pt)
+
+
+if __name__ == "__main__":
+    enumerate_cameras()
+
 
