@@ -60,6 +60,7 @@ class VideoWorker(QThread):
         self._output_file = None
         self.output_container = None
         self.out_stream = None
+        self._first_pts = None
 
     def run(self):
         input_container = None
@@ -129,6 +130,20 @@ class VideoWorker(QThread):
                 # Mux the packet to the output file for recording
                 if self._is_recording and self.output_container:
                     try:
+                        # Re-base timestamps to start from zero for this recording segment.
+                        # This avoids the huge starting timestamps that confuse players.
+                        if self._first_pts is None:
+                            if packet.pts is not None:
+                                self._first_pts = packet.pts
+                            elif packet.dts is not None:
+                                self._first_pts = packet.dts
+
+                        if self._first_pts is not None:
+                            if packet.pts is not None:
+                                packet.pts -= self._first_pts
+                            if packet.dts is not None:
+                                packet.dts -= self._first_pts
+
                         packet.stream = self.out_stream
                         self.output_container.mux(packet)
                     except FFmpegError as e:
@@ -149,6 +164,7 @@ class VideoWorker(QThread):
     def start_recording(self, output_file):
         self._output_file = output_file
         self._is_recording = True
+        self._first_pts = None
 
     def stop_recording(self):
         self._is_recording = False
