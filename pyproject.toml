@@ -11,6 +11,7 @@ dependencies = [
     "prettytable>=3.16.0",
     "pyside6>=6.9.1",
     "pyudev>=0.24.3",
+    "pyyaml>=6.0.2",
     "tomli>=2.2.1",
 ]
 
