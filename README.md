@@ -29,17 +29,17 @@ optional arguments:
 ```
 
 ```
-# cameras.toml                                                                                                                                                                           
-resolution = "1920x1080"                                                                                                                                                                 
-framerate = "30"                                                                                                                                                                         
-input_format = "mjpeg"                                                                                                                                                                   
-                                                                                                                                                                                         
-[[cameras]]                                                                                                                                                                              
-serial = "SERIAL_OF_LEFT_CAMERA"                                                                                                                                                         
-name = "01_left"                                                                                                                                                                         
-                                                                                                                                                                                         
-[[cameras]]                                                                                                                                                                              
-serial = "SERIAL_OF_RIGHT_CAMERA"                                                                                                                                                        
+# cameras.toml
+resolution = "1920x1080"
+framerate = "30"
+input_format = "mjpeg"
+
+[[cameras]]
+serial = "SERIAL_OF_LEFT_CAMERA"
+name = "01_left"
+
+[[cameras]]
+serial = "SERIAL_OF_RIGHT_CAMERA"
 name = "02_right"     
 ```
 
