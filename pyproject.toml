@@ -21,3 +21,6 @@ build-backend = "uv_build"
 [project.scripts]
 mvr = "multiviewrecorder:mvr"
 enumerate_cameras = "multiviewrecorder:enumerate_cameras"
+visualize_extrinsics = "multiviewrecorder:visualize_extrinsics"
+calibrate_extrinsics = "multiviewrecorder:calibrate_extrinsics"
+
