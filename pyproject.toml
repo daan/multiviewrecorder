@@ -24,4 +24,4 @@ mvr = "multiviewrecorder:mvr"
 enumerate_cameras = "multiviewrecorder:enumerate_cameras"
 visualize_extrinsics = "multiviewrecorder:visualize_extrinsics"
 calibrate_extrinsics = "multiviewrecorder:calibrate_extrinsics"
-
+find_checkerboards = "multiviewrecorder: find_checkerboards"
