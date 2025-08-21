@@ -3,4 +3,4 @@ from multiviewrecorder.mvr import mvr
 from multiviewrecorder.enumerate_cameras import enumerate_cameras
 from multiviewrecorder.visualize_extrinsics import visualize_extrinsics
 from multiviewrecorder.calibrate_extrinsics import calibrate_extrinsics
-from multiviewrecorder.find_checkerboards import find_checkerboards
+from multiviewrecorder.find_checkerboard import find_checkerboard
