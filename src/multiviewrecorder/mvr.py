@@ -8,7 +8,7 @@ from av import FFmpegError
 import cv2
 import numpy as np
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy
+    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy, QCheckBox
 )
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
@@ -215,23 +215,22 @@ class MainWindow(QMainWindow):
         self.stop_button = QPushButton("Stop Recording")
         self.stop_button.setEnabled(False)
         self.snapshot_button = QPushButton("Take Snapshots")
-        self.checkerboard_toggle_button = QPushButton("Find Checkerboard")
-        self.checkerboard_toggle_button.setCheckable(True)
+        self.checkerboard_checkbox = QCheckBox("Find Checkerboard")
 
         has_checkerboard = self.checkerboard_pattern is not None
-        self.checkerboard_toggle_button.setEnabled(has_checkerboard)
-        self.checkerboard_toggle_button.setChecked(has_checkerboard)
+        self.checkerboard_checkbox.setEnabled(has_checkerboard)
+        self.checkerboard_checkbox.setChecked(has_checkerboard)
 
         self.start_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
         self.snapshot_button.clicked.connect(self.take_snapshots)
-        self.checkerboard_toggle_button.toggled.connect(self.toggle_checkerboard_finding)
+        self.checkerboard_checkbox.toggled.connect(self.toggle_checkerboard_finding)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.start_button)
         button_layout.addWidget(self.stop_button)
         button_layout.addWidget(self.snapshot_button)
-        button_layout.addWidget(self.checkerboard_toggle_button)
+        button_layout.addWidget(self.checkerboard_checkbox)
         main_layout.addLayout(button_layout)
 
         # Set initial size
