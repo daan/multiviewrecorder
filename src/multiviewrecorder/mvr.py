@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy, QCheckBox,
-    QProgressDialog, QMessageBox
+    QProgressDialog, QMessageBox, QDialog
 )
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
@@ -48,6 +48,22 @@ class AspectLabel(QLabel):
     def resizeEvent(self, event):
         self.updatePixmap()
         super().resizeEvent(event)
+
+
+class CalibrationResultDialog(QDialog):
+    def __init__(self, pixmap, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Calibration Result")
+        layout = QVBoxLayout(self)
+        self.label = AspectLabel()
+        self.label.setPixmap(pixmap)
+        layout.addWidget(self.label)
+        
+        screen = self.screen().availableGeometry()
+        # Scale dialog to fit screen while maintaining aspect ratio
+        dialog_size = pixmap.size()
+        dialog_size.scale(screen.size() * 0.8, Qt.AspectRatioMode.KeepAspectRatio)
+        self.resize(dialog_size)
 
 
 class VideoWorker(QThread):
@@ -182,6 +198,7 @@ class VideoWorker(QThread):
 class CalibrationWorker(QThread):
     progress = Signal(str, int)
     finished = Signal(str)
+    visualizationReady = Signal(object)
 
     def __init__(self, output_dir, cameras, image_paths, checkerboard_pattern, grid_size, parent=None):
         super().__init__(parent)
@@ -339,16 +356,9 @@ class CalibrationWorker(QThread):
                 raise RuntimeError("No images were processed for visualization.")
             
             final_image = cv2.hconcat(images_out)
-            max_width = 1920
-            if final_image.shape[1] > max_width:
-                scale = max_width / final_image.shape[1]
-                final_image = cv2.resize(final_image, (0,0), fx=scale, fy=scale)
 
-            self.progress.emit("Displaying result. Press any key to close.", 100)
-            cv2.imshow('Calibration Result', final_image)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-
+            self.visualizationReady.emit(final_image)
+            self.progress.emit("Visualization ready.", 100)
             self.finished.emit("Calibration completed successfully!")
 
         except Exception as e:
@@ -466,6 +476,17 @@ class MainWindow(QMainWindow):
         print(f"Error on {path}: {error_message}", file=sys.stderr)
         self.video_labels[path].setText(error_message)
 
+    def show_calibration_result(self, image_array):
+        # image_array is a numpy array in BGR format from cv2
+        rgb_image = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        h, w, ch = rgb_image.shape
+        bytes_per_line = ch * w
+        q_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_image)
+
+        dialog = CalibrationResultDialog(pixmap, self)
+        dialog.exec()
+
     def start_calibration(self):
         print("Starting calibration process...")
 
@@ -503,6 +524,7 @@ class MainWindow(QMainWindow):
         )
         self.calib_worker.progress.connect(self.update_progress)
         self.calib_worker.finished.connect(self.calibration_finished)
+        self.calib_worker.visualizationReady.connect(self.show_calibration_result)
         self.progress_dialog.canceled.connect(self.calib_worker.stop)
         self.calib_worker.start()
 
