@@ -55,7 +55,7 @@ class VideoWorker(QThread):
         self.device = device
         self.options = options
         self.checkerboard_pattern = checkerboard_pattern
-        self.find_checkerboard = self.checkerboard_pattern is not None
+        self.find_checkerboard = False
         self.running = True
         self._is_recording = False
         self._output_file = None
@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
 
         has_checkerboard = self.checkerboard_pattern is not None
         self.checkerboard_checkbox.setEnabled(has_checkerboard)
-        self.checkerboard_checkbox.setChecked(has_checkerboard)
+        self.checkerboard_checkbox.setChecked(False)
 
         self.start_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
