@@ -5,6 +5,76 @@ import cv2
 import json
 import os
 import sys
+import numpy as np
+
+
+def find_checkerboard_corners(image, pattern_size):
+    """
+    Finds checkerboard corners in a given image.
+
+    Args:
+        image (np.ndarray): The input image (should be BGR).
+        pattern_size (tuple): A tuple (width, height) for the inner corners of the checkerboard.
+
+    Returns:
+        np.ndarray or None: An array of corner coordinates if found, otherwise None.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    ret, corners = cv2.findChessboardCorners(gray, pattern_size, None)
+
+    if not ret:
+        return None
+
+    # Refine corner positions to sub-pixel accuracy
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    corners_subpix = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+    return corners_subpix
+
+
+def generate_3d_points(pattern_size, grid_size):
+    """
+    Generates 3D object points for a checkerboard.
+
+    Args:
+        pattern_size (tuple): A tuple (width, height) for the inner corners.
+        grid_size (float): The size of the grid squares.
+
+    Returns:
+        list: A list of 3D points [x, y, z].
+    """
+    keypoints3d = []
+    for i in range(pattern_size[0]):  # width (cols)
+        for j in range(pattern_size[1]):  # height (rows)
+            keypoints3d.append([i * grid_size, j * grid_size, 0.0])
+    return keypoints3d
+
+
+def save_checkerboard_data(output_path, keypoints3d, keypoints2d, pattern_size, grid_size):
+    """
+    Saves checkerboard data to a JSON file.
+
+    Args:
+        output_path (str): The path for the output JSON file.
+        keypoints3d (list): The list of 3D points.
+        keypoints2d (list): The list of 2D points.
+        pattern_size (tuple): A tuple (width, height) for the inner corners.
+        grid_size (float): The size of the grid squares.
+    """
+    output_data = {
+        "keypoints3d": keypoints3d,
+        "keypoints2d": keypoints2d,
+        "pattern": [pattern_size[1], pattern_size[0]],  # As per example: [H, W]
+        "grid_size": grid_size,
+        "visited": True
+    }
+    try:
+        with open(output_path, 'w') as f:
+            json.dump(output_data, f, indent=4)
+        print(f"Successfully found checkerboard. Output written to {output_path}")
+    except IOError as e:
+        print(f"Error writing to file {output_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
 
 def find_checkerboard():
     """
@@ -48,41 +118,17 @@ def find_checkerboard():
         print(f"Error: Could not read image at '{args.image}'", file=sys.stderr)
         sys.exit(1)
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # Find the chess board corners
-    ret, corners = cv2.findChessboardCorners(gray, pattern_size, None)
-
-    if not ret:
+    corners = find_checkerboard_corners(img, pattern_size)
+    if corners is None:
         print("Checkerboard not found in the image.", file=sys.stderr)
         sys.exit(1)
 
-    # Refine corner positions to sub-pixel accuracy
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    corners_subpix = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
-
-    # Generate 3D keypoints in object space.
-    # The example JSON file (000177.json) has 3D points in column-major order.
-    # We generate them here to match that format, assuming findChessboardCorners
-    # returns 2D points in the same order.
-    keypoints3d = []
-    for i in range(pattern_size[0]):  # width (cols)
-        for j in range(pattern_size[1]):  # height (rows)
-            keypoints3d.append([i * args.grid, j * args.grid, 0.0])
+    keypoints3d = generate_3d_points(pattern_size, args.grid)
 
     # Format 2D keypoints
     keypoints2d = []
-    for corner in corners_subpix:
+    for corner in corners:
         keypoints2d.append([float(corner[0][0]), float(corner[0][1]), 1.0])
-
-    # Prepare data for JSON output, matching the example format
-    output_data = {
-        "keypoints3d": keypoints3d,
-        "keypoints2d": keypoints2d,
-        "pattern": [pattern_size[1], pattern_size[0]],  # As per example: [H, W]
-        "grid_size": args.grid,
-        "visited": True
-    }
 
     # Determine output file path
     if args.output:
@@ -91,15 +137,9 @@ def find_checkerboard():
         base_name = os.path.basename(args.image)
         name_without_ext = os.path.splitext(base_name)[0]
         output_path = f"{name_without_ext}.json"
+    
+    save_checkerboard_data(output_path, keypoints3d, keypoints2d, pattern_size, args.grid)
 
-    # Write data to JSON file
-    try:
-        with open(output_path, 'w') as f:
-            json.dump(output_data, f, indent=4)
-        print(f"Successfully found checkerboard. Output written to {output_path}")
-    except IOError as e:
-        print(f"Error writing to file {output_path}: {e}", file=sys.stderr)
-        sys.exit(1)
 
 if __name__ == "__main__":
     find_checkerboard()
