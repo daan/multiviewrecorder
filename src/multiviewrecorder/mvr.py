@@ -174,13 +174,14 @@ class VideoWorker(QThread):
         self.find_checkerboard = find
 
 class MainWindow(QMainWindow):
-    def __init__(self, cameras, options, checkerboard_pattern=None):
+    def __init__(self, cameras, options, checkerboard_pattern=None, output_dir='.'):
         super().__init__()
         self.setWindowTitle("Multi-Webcam Recorder")
 
         self.video_labels = {}
         self.workers = {}
         self.cameras = cameras
+        self.output_dir = output_dir
         self.checkerboard_pattern = checkerboard_pattern
         self.latest_frames = {}
         self.camera_details = {c['path']: c for c in cameras}
@@ -282,11 +283,13 @@ class MainWindow(QMainWindow):
             worker.set_find_checkerboard(checked)
 
     def start_recording(self):
+        video_output_dir = os.path.join(self.output_dir, "videos")
+        os.makedirs(video_output_dir, exist_ok=True)
         for camera in self.cameras:
             path = camera['path']
             # Use mapped_name for filename if available, otherwise fall back to serial
             filename_base = camera.get('mapped_name', camera['serial'])
-            output_file = f"{filename_base}.mkv"
+            output_file = os.path.join(video_output_dir, f"{filename_base}.mkv")
             if path in self.workers:
                 self.workers[path].start_recording(output_file)
         self.start_button.setEnabled(False)
@@ -310,7 +313,7 @@ class MainWindow(QMainWindow):
             camera_details = self.camera_details[path]
             filename_base = camera_details.get('mapped_name', camera_details['serial'])
             
-            output_dir = os.path.join("images", filename_base)
+            output_dir = os.path.join(self.output_dir, "images", filename_base)
             os.makedirs(output_dir, exist_ok=True)
             
             count = self.snapshot_counters[filename_base]
@@ -337,6 +340,7 @@ class MainWindow(QMainWindow):
 def mvr():
     parser = argparse.ArgumentParser(description="Record from multiple v4l2 cameras, displaying previews.")
     parser.add_argument("--config", help="Path to a TOML configuration file.")
+    parser.add_argument("--out", help="Path to the output folder.")
     parser.add_argument("--vid", help="Filter by vendor ID (e.g., 046d).")
     parser.add_argument("--pid", help="Filter by product ID (e.g., 082d).")
     parser.add_argument("--resolution", help="Video resolution (e.g., 1280x720). Overrides config file.")
@@ -344,6 +348,11 @@ def mvr():
     parser.add_argument("--input_format", help="Input format (e.g., mjpeg). Overrides config file.")
     parser.add_argument("--checkerboard", help="Find and visualize a checkerboard of the given pattern (e.g., 7x6). Overrides config file.")
     args = parser.parse_args()
+
+    output_dir = args.out or '.'
+    if not os.path.isdir(output_dir):
+        print(f"Error: Output directory not found at '{output_dir}'", file=sys.stderr)
+        sys.exit(1)
 
     config = {}
     if args.config:
@@ -429,7 +438,7 @@ def mvr():
             break
 
     app = QApplication(sys.argv)
-    main_window = MainWindow(cameras_to_use, options, checkerboard_pattern=checkerboard_pattern)
+    main_window = MainWindow(cameras_to_use, options, checkerboard_pattern=checkerboard_pattern, output_dir=output_dir)
     main_window.show()
     sys.exit(app.exec())
 
