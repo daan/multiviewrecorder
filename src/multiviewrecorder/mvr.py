@@ -55,6 +55,7 @@ class VideoWorker(QThread):
         self.device = device
         self.options = options
         self.checkerboard_pattern = checkerboard_pattern
+        self.find_checkerboard = self.checkerboard_pattern is not None
         self.running = True
         self._is_recording = False
         self._output_file = None
@@ -91,7 +92,7 @@ class VideoWorker(QThread):
                         )
 
                         corners = None
-                        if self.checkerboard_pattern:
+                        if self.find_checkerboard and self.checkerboard_pattern:
                             # Use a BGR ndarray for OpenCV
                             bgr_ndarray = frame.to_ndarray(format='bgr24')
                             gray = cv2.cvtColor(bgr_ndarray, cv2.COLOR_BGR2GRAY)
@@ -169,6 +170,9 @@ class VideoWorker(QThread):
     def stop_recording(self):
         self._is_recording = False
 
+    def set_find_checkerboard(self, find):
+        self.find_checkerboard = find
+
 class MainWindow(QMainWindow):
     def __init__(self, cameras, options, checkerboard_pattern=None):
         super().__init__()
@@ -210,13 +214,24 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("Start Recording")
         self.stop_button = QPushButton("Stop Recording")
         self.stop_button.setEnabled(False)
+        self.snapshot_button = QPushButton("Take Snapshots")
+        self.checkerboard_toggle_button = QPushButton("Find Checkerboard")
+        self.checkerboard_toggle_button.setCheckable(True)
+
+        has_checkerboard = self.checkerboard_pattern is not None
+        self.checkerboard_toggle_button.setEnabled(has_checkerboard)
+        self.checkerboard_toggle_button.setChecked(has_checkerboard)
 
         self.start_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
+        self.snapshot_button.clicked.connect(self.take_snapshots)
+        self.checkerboard_toggle_button.toggled.connect(self.toggle_checkerboard_finding)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.start_button)
         button_layout.addWidget(self.stop_button)
+        button_layout.addWidget(self.snapshot_button)
+        button_layout.addWidget(self.checkerboard_toggle_button)
         main_layout.addLayout(button_layout)
 
         # Set initial size
@@ -262,6 +277,10 @@ class MainWindow(QMainWindow):
     def on_error(self, path, error_message):
         print(f"Error on {path}: {error_message}", file=sys.stderr)
         self.video_labels[path].setText(error_message)
+
+    def toggle_checkerboard_finding(self, checked):
+        for worker in self.workers.values():
+            worker.set_find_checkerboard(checked)
 
     def start_recording(self):
         for camera in self.cameras:
@@ -324,18 +343,8 @@ def mvr():
     parser.add_argument("--resolution", help="Video resolution (e.g., 1280x720). Overrides config file.")
     parser.add_argument("--framerate", help="Video framerate (e.g., 30). Overrides config file.")
     parser.add_argument("--input_format", help="Input format (e.g., mjpeg). Overrides config file.")
-    parser.add_argument("--checkerboard", help="Find and visualize a checkerboard of the given pattern (e.g., 7x6).")
+    parser.add_argument("--checkerboard", help="Find and visualize a checkerboard of the given pattern (e.g., 7x6). Overrides config file.")
     args = parser.parse_args()
-
-    checkerboard_pattern = None
-    if args.checkerboard:
-        try:
-            pattern_cols, pattern_rows = map(int, args.checkerboard.split('x'))
-            checkerboard_pattern = (pattern_cols, pattern_rows)
-            print(f"Will search for a {args.checkerboard} checkerboard pattern.")
-        except (ValueError, TypeError):
-            print(f"Warning: Invalid checkerboard pattern '{args.checkerboard}'. Should be 'colsxrows' e.g., '7x6'. Disabling checkerboard detection.")
-            checkerboard_pattern = None
 
     config = {}
     if args.config:
@@ -355,6 +364,23 @@ def mvr():
         'framerate': args.framerate or config.get('framerate', '30'),
         'input_format': args.input_format or config.get('input_format', 'mjpeg')
     }
+
+    checkerboard_config = config.get('checkerboard', {})
+    checkerboard_pattern_str = args.checkerboard or checkerboard_config.get('pattern')
+
+    checkerboard_pattern = None
+    if checkerboard_pattern_str:
+        try:
+            pattern_cols, pattern_rows = map(int, checkerboard_pattern_str.split('x'))
+            checkerboard_pattern = (pattern_cols, pattern_rows)
+            print(f"Will search for a {checkerboard_pattern_str} checkerboard pattern.")
+        except (ValueError, TypeError):
+            print(f"Warning: Invalid checkerboard pattern '{checkerboard_pattern_str}'. Should be 'colsxrows' e.g., '7x6'. Disabling checkerboard detection.")
+            checkerboard_pattern = None
+
+    # grid_size is not used by mvr, but we acknowledge it if it's in the config
+    if 'grid_size' in checkerboard_config:
+        print(f"Checkerboard grid size set to {checkerboard_config['grid_size']} (for use with other tools).")
 
     print("Searching for cameras...")
     all_cameras = get_camera_details(vid_filter=args.vid, pid_filter=args.pid)
