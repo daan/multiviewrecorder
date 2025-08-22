@@ -8,11 +8,15 @@ from av import FFmpegError
 import cv2
 import numpy as np
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy, QCheckBox
+    QApplication, QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton, QHBoxLayout, QSizePolicy, QCheckBox,
+    QProgressDialog, QMessageBox
 )
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
 from multiviewrecorder.enumerate_cameras import get_camera_details
+from multiviewrecorder.calibrate_extrinsics import read_intrinsics, write_extrinsics
+from multiviewrecorder.find_checkerboard import find_checkerboard_corners, generate_3d_points, save_checkerboard_data
+from multiviewrecorder.visualize_extrinsics import read_cameras, load_cube
 
 
 class AspectLabel(QLabel):
@@ -173,8 +177,186 @@ class VideoWorker(QThread):
     def set_find_checkerboard(self, find):
         self.find_checkerboard = find
 
+
+class CalibrationWorker(QThread):
+    progress = Signal(str, int)
+    finished = Signal(str)
+
+    def __init__(self, output_dir, cameras, image_paths, checkerboard_pattern, grid_size, parent=None):
+        super().__init__(parent)
+        self.output_dir = output_dir
+        self.cameras = cameras
+        self.image_paths = image_paths # dict of cam_name -> image_path
+        self.checkerboard_pattern = checkerboard_pattern
+        self.grid_size = grid_size
+        self._is_running = True
+
+    def stop(self):
+        self._is_running = False
+
+    def run(self):
+        try:
+            # Step 1: Check prerequisites
+            if not self._is_running: return
+            self.progress.emit("Step 1/5: Checking prerequisites...", 0)
+            print("\n[Calibration] Step 1/5: Checking prerequisites...")
+
+            if not self.checkerboard_pattern or self.grid_size is None:
+                raise RuntimeError("Checkerboard pattern or grid size not configured.")
+
+            intri_path = os.path.join(self.output_dir, 'intri.yml')
+            if not os.path.exists(intri_path):
+                raise RuntimeError(f"Intrinsic calibration file not found at '{intri_path}'")
+            
+            intrinsics = read_intrinsics(intri_path)
+            if not intrinsics:
+                raise RuntimeError("Could not read or parse intrinsics file.")
+
+            # Step 2: Find checkerboard corners in images
+            if not self._is_running: return
+            self.progress.emit("Step 2/5: Finding checkerboards...", 20)
+            print("[Calibration] Step 2/5: Finding checkerboards...")
+            json_paths = {}
+            cam_names_with_corners = []
+
+            for cam in self.cameras:
+                if not self._is_running: return
+                cam_name = cam.get('mapped_name', cam['serial'])
+                image_path = self.image_paths.get(cam_name)
+                if not image_path:
+                    print(f"Warning: No image path for camera '{cam_name}'. Skipping.")
+                    continue
+
+                img = cv2.imread(image_path)
+                if img is None:
+                    print(f"Warning: Could not read image '{image_path}'. Skipping.")
+                    continue
+
+                corners = find_checkerboard_corners(img, self.checkerboard_pattern)
+                if corners is None:
+                    print(f"Warning: Checkerboard not found for camera '{cam_name}'. Skipping.")
+                    continue
+                
+                print(f"Checkerboard found for camera '{cam_name}'.")
+                cam_names_with_corners.append(cam_name)
+
+                keypoints3d = generate_3d_points(self.checkerboard_pattern, self.grid_size)
+                keypoints2d = [[float(c[0][0]), float(c[0][1]), 1.0] for c in corners]
+                
+                chessboard_dir = os.path.join(self.output_dir, "chessboard", cam_name)
+                os.makedirs(chessboard_dir, exist_ok=True)
+                
+                base_name = os.path.basename(image_path)
+                json_name = os.path.splitext(base_name)[0] + ".json"
+                json_path = os.path.join(chessboard_dir, json_name)
+                
+                save_checkerboard_data(json_path, keypoints3d, keypoints2d, self.checkerboard_pattern, self.grid_size)
+                json_paths[cam_name] = json_path
+
+            if not json_paths:
+                raise RuntimeError("Could not find checkerboard in any of the camera images.")
+
+            # Step 3: Calibrate extrinsics
+            if not self._is_running: return
+            self.progress.emit("Step 3/5: Calibrating extrinsics...", 40)
+            print("[Calibration] Step 3/5: Calibrating extrinsics...")
+            extrinsics = {}
+
+            for cam_name in cam_names_with_corners:
+                if not self._is_running: return
+                json_path = json_paths[cam_name]
+                try:
+                    with open(json_path, 'r') as f:
+                        data = json.load(f)
+                    k3d = np.array(data['keypoints3d'], dtype=np.float32)
+                    k2d = np.array(data['keypoints2d'], dtype=np.float32)
+                except Exception as e:
+                    print(f"Warning: Could not read or parse '{json_path}': {e}. Skipping camera '{cam_name}'.")
+                    continue
+
+                K = intrinsics[cam_name]['K']
+                dist = intrinsics[cam_name]['dist']
+                valid_indices = k2d[:, 2] > 0
+                k3d_valid = k3d[valid_indices]
+                k2d_valid = k2d[valid_indices, :2]
+
+                if len(k3d_valid) < 4:
+                    print(f"Warning: Not enough valid points (<4) for camera '{cam_name}'. Skipping.")
+                    continue
+
+                ret, rvec, tvec = cv2.solvePnP(k3d_valid, k2d_valid, K, dist, flags=cv2.SOLVEPNP_ITERATIVE)
+                if ret:
+                    rot, _ = cv2.Rodrigues(rvec)
+                    extrinsics[cam_name] = {'Rvec': rvec, 'Rot': rot, 'T': tvec}
+                else:
+                    print(f"Warning: solvePnP failed for camera '{cam_name}'.")
+
+            if not extrinsics:
+                raise RuntimeError("Extrinsic calibration failed for all cameras.")
+
+            # Step 4: Write extrinsics file
+            if not self._is_running: return
+            self.progress.emit("Step 4/5: Writing extrinsics file...", 60)
+            print("[Calibration] Step 4/5: Writing extrinsics file...")
+            output_file = os.path.join(self.output_dir, 'extri.yml')
+            write_extrinsics(output_file, extrinsics, list(intrinsics.keys()))
+
+            # Step 5: Visualize results
+            if not self._is_running: return
+            self.progress.emit("Step 5/5: Visualizing results...", 80)
+            print("[Calibration] Step 5/5: Visualizing results...")
+            
+            calib_cameras = read_cameras(self.output_dir)
+            if not calib_cameras:
+                raise RuntimeError("Could not read back calibration files for visualization.")
+
+            points3d, lines = load_cube(grid_size=self.grid_size)
+
+            images_out = []
+            for cam_name in sorted(calib_cameras.keys()):
+                camera = calib_cameras[cam_name]
+                img_path = self.image_paths[cam_name]
+                img = cv2.imread(img_path)
+                if img is None: continue
+
+                rvec, _ = cv2.Rodrigues(camera['R'])
+                tvec = camera['T']
+                points2d_dist, _ = cv2.projectPoints(points3d, rvec, tvec, camera['K'], camera['dist'])
+                
+                img_undistorted = cv2.undistort(img, camera['K'], camera['dist'])
+                points2d_undist = cv2.undistortPoints(points2d_dist, camera['K'], camera['dist'], P=camera['K'])
+                points2d = points2d_undist.squeeze().astype(int)
+                
+                for line in lines:
+                    p1 = tuple(points2d[line[0]])
+                    p2 = tuple(points2d[line[1]])
+                    cv2.line(img_undistorted, p1, p2, (0, 0, 255), 2, cv2.LINE_AA)
+                
+                images_out.append(img_undistorted)
+
+            if not images_out:
+                raise RuntimeError("No images were processed for visualization.")
+            
+            final_image = cv2.hconcat(images_out)
+            max_width = 1920
+            if final_image.shape[1] > max_width:
+                scale = max_width / final_image.shape[1]
+                final_image = cv2.resize(final_image, (0,0), fx=scale, fy=scale)
+
+            self.progress.emit("Displaying result. Press any key to close.", 100)
+            cv2.imshow('Calibration Result', final_image)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+
+            self.finished.emit("Calibration completed successfully!")
+
+        except Exception as e:
+            print(f"Error during calibration: {e}", file=sys.stderr)
+            self.finished.emit(f"Calibration failed: {e}")
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, cameras, options, checkerboard_pattern=None, output_dir='.'):
+    def __init__(self, cameras, options, checkerboard_pattern=None, output_dir='.', checkerboard_grid_size=None):
         super().__init__()
         self.setWindowTitle("Multi-Webcam Recorder")
 
@@ -183,6 +365,7 @@ class MainWindow(QMainWindow):
         self.cameras = cameras
         self.output_dir = output_dir
         self.checkerboard_pattern = checkerboard_pattern
+        self.checkerboard_grid_size = checkerboard_grid_size
         self.latest_frames = {}
         self.camera_details = {c['path']: c for c in cameras}
         self.snapshot_counters = {}
@@ -217,21 +400,25 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self.snapshot_button = QPushButton("Take Snapshots")
         self.checkerboard_checkbox = QCheckBox("Find Checkerboard")
+        self.calibrate_button = QPushButton("Calibrate")
 
         has_checkerboard = self.checkerboard_pattern is not None
         self.checkerboard_checkbox.setEnabled(has_checkerboard)
         self.checkerboard_checkbox.setChecked(False)
+        self.calibrate_button.setEnabled(has_checkerboard)
 
         self.start_button.clicked.connect(self.start_recording)
         self.stop_button.clicked.connect(self.stop_recording)
         self.snapshot_button.clicked.connect(self.take_snapshots)
         self.checkerboard_checkbox.toggled.connect(self.toggle_checkerboard_finding)
+        self.calibrate_button.clicked.connect(self.start_calibration)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.start_button)
         button_layout.addWidget(self.stop_button)
         button_layout.addWidget(self.snapshot_button)
         button_layout.addWidget(self.checkerboard_checkbox)
+        button_layout.addWidget(self.calibrate_button)
         main_layout.addLayout(button_layout)
 
         # Set initial size
@@ -277,6 +464,57 @@ class MainWindow(QMainWindow):
     def on_error(self, path, error_message):
         print(f"Error on {path}: {error_message}", file=sys.stderr)
         self.video_labels[path].setText(error_message)
+
+    def start_calibration(self):
+        print("Starting calibration process...")
+
+        image_paths = {}
+        for path, qimage in self.latest_frames.items():
+            if qimage is None:
+                QMessageBox.critical(self, "Error", f"No frame available for camera {path}")
+                return
+            
+            camera_details = self.camera_details[path]
+            filename_base = camera_details.get('mapped_name', camera_details['serial'])
+            
+            output_dir_img = os.path.join(self.output_dir, "images", filename_base)
+            os.makedirs(output_dir_img, exist_ok=True)
+            
+            count = self.snapshot_counters[filename_base]
+            filepath = os.path.join(output_dir_img, f"{count:06d}.jpg")
+            
+            if qimage.save(filepath):
+                print(f"Saved snapshot for calibration to {filepath}")
+                image_paths[filename_base] = filepath
+                self.snapshot_counters[filename_base] += 1
+            else:
+                QMessageBox.critical(self, "Error", f"Error saving snapshot to {filepath}")
+                return
+
+        self.progress_dialog = QProgressDialog("Calibrating...", "Cancel", 0, 100, self)
+        self.progress_dialog.setWindowModality(Qt.WindowModal)
+        self.progress_dialog.setAutoClose(False)
+        self.progress_dialog.setAutoReset(False)
+
+        self.calib_worker = CalibrationWorker(
+            self.output_dir, self.cameras, image_paths, 
+            self.checkerboard_pattern, self.checkerboard_grid_size
+        )
+        self.calib_worker.progress.connect(self.update_progress)
+        self.calib_worker.finished.connect(self.calibration_finished)
+        self.progress_dialog.canceled.connect(self.calib_worker.stop)
+        self.calib_worker.start()
+
+    def update_progress(self, message, value):
+        self.progress_dialog.setLabelText(message)
+        self.progress_dialog.setValue(value)
+
+    def calibration_finished(self, message):
+        self.progress_dialog.close()
+        if "success" in message.lower():
+            QMessageBox.information(self, "Calibration Complete", message)
+        else:
+            QMessageBox.critical(self, "Calibration Failed", message)
 
     def toggle_checkerboard_finding(self, checked):
         for worker in self.workers.values():
@@ -386,9 +624,9 @@ def mvr():
             print(f"Warning: Invalid checkerboard pattern '{checkerboard_pattern_str}'. Should be 'colsxrows' e.g., '7x6'. Disabling checkerboard detection.")
             checkerboard_pattern = None
 
-    # grid_size is not used by mvr, but we acknowledge it if it's in the config
-    if 'grid_size' in checkerboard_config:
-        print(f"Checkerboard grid size set to {checkerboard_config['grid_size']} (for use with other tools).")
+    checkerboard_grid_size = checkerboard_config.get('grid_size')
+    if checkerboard_grid_size:
+        print(f"Checkerboard grid size set to {checkerboard_grid_size}.")
 
     print("Searching for cameras...")
     all_cameras = get_camera_details(vid_filter=args.vid, pid_filter=args.pid)
@@ -438,7 +676,7 @@ def mvr():
             break
 
     app = QApplication(sys.argv)
-    main_window = MainWindow(cameras_to_use, options, checkerboard_pattern=checkerboard_pattern, output_dir=output_dir)
+    main_window = MainWindow(cameras_to_use, options, checkerboard_pattern=checkerboard_pattern, output_dir=output_dir, checkerboard_grid_size=checkerboard_grid_size)
     main_window.show()
     sys.exit(app.exec())
 
