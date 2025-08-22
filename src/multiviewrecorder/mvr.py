@@ -3,6 +3,7 @@ import argparse
 import tomli
 import subprocess
 import os
+import json
 import av
 from av import FFmpegError
 import cv2
