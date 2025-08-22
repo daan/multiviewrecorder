@@ -86,34 +86,34 @@ def write_extrinsics(output_path, extrinsics, cam_names):
     except IOError as e:
         print(f"Error writing to file {output_path}: {e}", file=sys.stderr)
 
-def calibrate_extrinsics():
-    parser = argparse.ArgumentParser(description="Perform extrinsic camera calibration using chessboard corners.")
-    parser.add_argument("path", help="Root directory containing the 'chessboard' folder.")
-    parser.add_argument("--intri", required=True, help="Path to the intrinsic calibration file (intri.yml).")
-    parser.add_argument('--image_id', type=int, default=0, help="Index of the JSON file to use for calibration (default: 0).")
-    parser.add_argument("--output", help="Path to the output extrinsic file. Defaults to 'extri.yml' in the root path.")
-    args = parser.parse_args()
+def calibrate(path, intrinsics, image_id=0):
+    """
+    Performs extrinsic calibration for a set of cameras using pre-found chessboard corners.
 
-    intrinsics = read_intrinsics(args.intri)
-    if not intrinsics:
-        sys.exit(1)
+    Args:
+        path (str): Root directory containing the 'chessboard' folder with JSON files.
+        intrinsics (dict): A dictionary containing intrinsic parameters (K, dist) for each camera.
+        image_id (int): The index of the JSON file to use for calibration from the sorted list of files.
 
+    Returns:
+        dict: A dictionary containing the calculated extrinsic parameters ('Rvec', 'Rot', 'T') for each camera.
+    """
     cam_names = sorted(intrinsics.keys())
     extrinsics = {}
 
     for cam in cam_names:
-        cam_chessboard_dir = os.path.join(args.path, 'chessboard', cam)
+        cam_chessboard_dir = os.path.join(path, 'chessboard', cam)
         json_files = sorted(glob.glob(os.path.join(cam_chessboard_dir, '*.json')))
 
         if not json_files:
             print(f"Warning: No JSON files found for camera '{cam}' in '{cam_chessboard_dir}'. Skipping.", file=sys.stderr)
             continue
 
-        if args.image_id >= len(json_files):
-            print(f"Warning: --image_id {args.image_id} is out of bounds for camera '{cam}' (found {len(json_files)} files). Skipping.", file=sys.stderr)
+        if image_id >= len(json_files):
+            print(f"Warning: --image_id {image_id} is out of bounds for camera '{cam}' (found {len(json_files)} files). Skipping.", file=sys.stderr)
             continue
 
-        json_path = json_files[args.image_id]
+        json_path = json_files[image_id]
 
         try:
             with open(json_path, 'r') as f:
@@ -150,10 +150,27 @@ def calibrate_extrinsics():
         else:
             print(f"Warning: solvePnP failed for camera '{cam}'.", file=sys.stderr)
     
+    return extrinsics
+
+def calibrate_extrinsics():
+    parser = argparse.ArgumentParser(description="Perform extrinsic camera calibration using chessboard corners.")
+    parser.add_argument("path", help="Root directory containing the 'chessboard' folder.")
+    parser.add_argument("--intri", required=True, help="Path to the intrinsic calibration file (intri.yml).")
+    parser.add_argument('--image_id', type=int, default=0, help="Index of the JSON file to use for calibration (default: 0).")
+    parser.add_argument("--output", help="Path to the output extrinsic file. Defaults to 'extri.yml' in the root path.")
+    args = parser.parse_args()
+
+    intrinsics = read_intrinsics(args.intri)
+    if not intrinsics:
+        sys.exit(1)
+
+    extrinsics = calibrate(args.path, intrinsics, image_id=args.image_id)
+    
     if not extrinsics:
         print("Error: Extrinsic calibration failed for all cameras.", file=sys.stderr)
         sys.exit(1)
 
+    cam_names = sorted(intrinsics.keys())
     output_file = args.output if args.output else os.path.join(args.path, 'extri.yml')
     write_extrinsics(output_file, extrinsics, cam_names)
 
